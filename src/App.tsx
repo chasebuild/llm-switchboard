@@ -9,6 +9,9 @@ type Limits = {
 
 type Provider = {
   name: string;
+  description?: string;
+  notes?: string[];
+  base_urls?: string[];
   models: string[];
   limits: Limits;
 };
@@ -311,6 +314,9 @@ function App() {
     if (!keyDefaultModel.trim() && provider.models.length > 0) {
       setKeyDefaultModel(provider.models[0]);
     }
+    if (!keyBaseUrl.trim() && provider.base_urls && provider.base_urls.length > 0) {
+      setKeyBaseUrl(provider.base_urls[0]);
+    }
   }
 
   return (
@@ -390,6 +396,21 @@ function App() {
                     Use This Provider
                   </button>
                 </div>
+                {selectedProvider.description && (
+                  <p className="provider-description">{selectedProvider.description}</p>
+                )}
+                {selectedProvider.base_urls && selectedProvider.base_urls.length > 0 && (
+                  <div className="provider-base">
+                    <h4>Base URLs</h4>
+                    <div className="base-list">
+                      {selectedProvider.base_urls.map((url) => (
+                        <span key={url} className="base-chip">
+                          {url}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="model-list">
                   {selectedProvider.models.length === 0 && (
                     <p className="empty-note">No models parsed yet.</p>
@@ -400,6 +421,14 @@ function App() {
                     </span>
                   ))}
                 </div>
+                {selectedProvider.notes && selectedProvider.notes.length > 0 && (
+                  <div className="provider-notes">
+                    <h4>Notes</h4>
+                    {selectedProvider.notes.map((note, index) => (
+                      <p key={`${selectedProvider.name}-note-${index}`}>{note}</p>
+                    ))}
+                  </div>
+                )}
                 <div className="provider-doc">
                   <p>
                     Add your API key and base URL below. The proxy will expose this provider through

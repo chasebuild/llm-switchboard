@@ -31,6 +31,12 @@ struct Limits {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Provider {
     name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    notes: Vec<String>,
+    #[serde(default)]
+    base_urls: Vec<String>,
     models: Vec<String>,
     limits: Limits,
 }
@@ -485,6 +491,7 @@ async fn fetch_markdown() -> Result<String, String> {
 fn parse_markdown(markdown: &str) -> Vec<Provider> {
     let heading_re = Regex::new(r"^###\s+(.*)$").unwrap();
     let link_re = Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap();
+    let url_re = Regex::new(r"https?://[^\s)]+").unwrap();
     let rpm_re =
         Regex::new(r"(?i)(\d[\d,]*\s*[kK]?)\s*(rpm|requests per minute)").unwrap();
     let tpm_re =
@@ -493,6 +500,7 @@ fn parse_markdown(markdown: &str) -> Vec<Provider> {
     let mut providers: Vec<Provider> = Vec::new();
     let mut current: Option<Provider> = None;
     let mut in_models = false;
+    let mut in_description = false;
 
     for line in markdown.lines() {
         let trimmed = line.trim();
@@ -505,6 +513,9 @@ fn parse_markdown(markdown: &str) -> Vec<Provider> {
             let name = clean_heading(raw_name, &link_re);
             current = Some(Provider {
                 name,
+                description: String::new(),
+                notes: Vec::new(),
+                base_urls: Vec::new(),
                 models: Vec::new(),
                 limits: Limits {
                     rpm: None,
@@ -512,6 +523,7 @@ fn parse_markdown(markdown: &str) -> Vec<Provider> {
                 },
             });
             in_models = false;
+            in_description = true;
             continue;
         }
 
@@ -521,10 +533,16 @@ fn parse_markdown(markdown: &str) -> Vec<Provider> {
 
         if trimmed.is_empty() {
             in_models = false;
+            in_description = false;
         }
 
         if is_models_heading(trimmed) {
             in_models = true;
+            in_description = false;
+        }
+
+        if in_description && !trimmed.is_empty() && provider.description.is_empty() {
+            provider.description = strip_markdown_links(trimmed).trim().to_string();
         }
 
         if in_models {
@@ -536,6 +554,26 @@ fn parse_markdown(markdown: &str) -> Vec<Provider> {
         } else if let Some(models) = parse_models_inline(trimmed) {
             for model in models {
                 push_unique(&mut provider.models, model);
+            }
+        }
+
+        if !trimmed.is_empty() && !in_models && !is_limits_heading(trimmed) {
+            if trimmed.starts_with('-') || trimmed.starts_with('*') {
+                let note = trimmed
+                    .trim_start_matches(&['-', '*'][..])
+                    .trim()
+                    .to_string();
+                if !note.is_empty() {
+                    provider.notes.push(strip_markdown_links(&note).trim().to_string());
+                }
+            }
+        }
+
+        for cap in url_re.captures_iter(trimmed) {
+            if let Some(url) = cap.get(0).map(|m| m.as_str()) {
+                if looks_like_base_url(url) {
+                    push_unique(&mut provider.base_urls, url.to_string());
+                }
             }
         }
 
@@ -577,6 +615,11 @@ fn is_models_heading(line: &str) -> bool {
         || lower.starts_with("model")
         || lower.contains("supported models")
         || lower.contains("available models")
+}
+
+fn is_limits_heading(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    lower.starts_with("limits") || lower.contains("rate limit")
 }
 
 fn parse_models_line(line: &str) -> Option<Vec<String>> {
@@ -647,6 +690,16 @@ fn parse_number(raw: &str) -> Option<u32> {
 
 fn default_adapter() -> String {
     "openai".to_string()
+}
+
+fn looks_like_base_url(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    lower.contains("api")
+        || lower.contains("openrouter")
+        || lower.contains("generativelanguage")
+        || lower.contains("openai")
+        || lower.contains("groq")
+        || lower.contains("cerebras")
 }
 
 fn push_unique(list: &mut Vec<String>, value: String) {

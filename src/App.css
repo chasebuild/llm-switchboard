@@ -230,6 +230,35 @@ h1 {
   gap: 16px;
 }
 
+.provider-description {
+  margin: 0;
+  color: #6c5534;
+}
+
+.provider-base h4,
+.provider-notes h4 {
+  margin: 0 0 8px;
+}
+
+.base-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.base-chip {
+  background: #efe3cd;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  color: #3f321c;
+}
+
+.provider-notes p {
+  margin: 0 0 8px;
+  color: #5c4a2f;
+}
+
 .model-list {
   display: flex;
   flex-wrap: wrap;

@@ -1,19 +1,19 @@
 use axum::{
     extract::{Json, State as AxumState},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
-use futures_util::StreamExt;
-use regex::Regex;
+use free_llm_parser::{parse_markdown, ProviderConfig};
+mod adapters;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -21,32 +21,6 @@ use uuid::Uuid;
 const SOURCE_URL: &str =
     "https://raw.githubusercontent.com/cheahjs/free-llm-api-resources/main/README.md";
 const KEYRING_SERVICE: &str = "freellm-switchboard";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Limits {
-    rpm: Option<u32>,
-    tpm: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Provider {
-    name: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    notes: Vec<String>,
-    #[serde(default)]
-    base_urls: Vec<String>,
-    models: Vec<String>,
-    limits: Limits,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProviderConfig {
-    source_url: String,
-    fetched_at: u64,
-    providers: Vec<Provider>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SyncResult {
@@ -156,7 +130,10 @@ async fn sync_providers(app: AppHandle) -> Result<SyncResult, String> {
     let new_providers = diff_new_providers(previous.as_ref(), &config);
 
     write_config(&app, &config)?;
-    Ok(SyncResult { config, new_providers })
+    Ok(SyncResult {
+        config,
+        new_providers,
+    })
 }
 
 #[tauri::command]
@@ -227,7 +204,7 @@ fn remove_key(app: AppHandle, payload: RemoveKeyPayload) -> Result<(), String> {
         return Ok(());
     };
     let record = list.keys.remove(pos);
-    write_keys(&app, &list)?;
+    write_keys(&app, &mut list)?;
 
     let username = format!("{}:{}", record.provider, record.id);
     if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, &username) {
@@ -239,52 +216,54 @@ fn remove_key(app: AppHandle, payload: RemoveKeyPayload) -> Result<(), String> {
 #[tauri::command]
 async fn check_key(app: AppHandle, id: String) -> Result<KeyRecord, String> {
     let mut list = read_keys(&app)?.unwrap_or_default();
-    let record = list
+    let index = list
         .keys
-        .iter_mut()
-        .find(|record| record.id == id)
+        .iter()
+        .position(|record| record.id == id)
         .ok_or_else(|| "Key not found".to_string())?;
+    let record_snapshot = list.keys[index].clone();
 
-    let username = format!("{}:{}", record.provider, record.id);
+    let username = format!("{}:{}", record_snapshot.provider, record_snapshot.id);
     let entry = keyring::Entry::new(KEYRING_SERVICE, &username)
         .map_err(|err| format!("Failed to open keyring entry: {err}"))?;
     let secret = match entry.get_password() {
         Ok(secret) => secret,
         Err(_) => {
-            record.status = "Missing".to_string();
-            record.last_checked = Some(current_epoch_seconds());
+            {
+                let record = &mut list.keys[index];
+                record.status = "Missing".to_string();
+                record.last_checked = Some(current_epoch_seconds());
+            }
             write_keys(&app, &list)?;
-            return Ok(record.clone());
+            return Ok(list.keys[index].clone());
         }
     };
 
-    let base_url = record.base_url.trim();
+    let base_url = record_snapshot.base_url.trim();
     if base_url.is_empty() {
-        record.status = "MissingBaseUrl".to_string();
-        record.last_checked = Some(current_epoch_seconds());
+        {
+            let record = &mut list.keys[index];
+            record.status = "MissingBaseUrl".to_string();
+            record.last_checked = Some(current_epoch_seconds());
+        }
         write_keys(&app, &list)?;
-        return Ok(record.clone());
+        return Ok(list.keys[index].clone());
     }
 
-    let adapter = record.adapter.trim().to_lowercase();
+    let adapter = record_snapshot.adapter.trim().to_lowercase();
     let client = reqwest::Client::new();
     let status = match adapter.as_str() {
         "openai" | "openrouter" => {
             let models_url = format!("{}/v1/models", base_url.trim_end_matches('/'));
-            match client
-                .get(models_url)
-                .bearer_auth(&secret)
-                .send()
-                .await
-            {
+            match client.get(models_url).bearer_auth(&secret).send().await {
                 Ok(resp) if resp.status().is_success() => "Active",
                 Ok(resp) if resp.status().as_u16() == 401 => "Unauthorized",
                 Ok(resp) if resp.status().as_u16() == 403 => "Forbidden",
                 Ok(resp) if resp.status().as_u16() == 404 => {
-                    let test_model = record
+                    let test_model = record_snapshot
                         .default_model
                         .clone()
-                        .or_else(|| record.models.first().cloned());
+                        .or_else(|| record_snapshot.models.first().cloned());
                     if let Some(model) = test_model {
                         let chat_url =
                             format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
@@ -329,10 +308,10 @@ async fn check_key(app: AppHandle, id: String) -> Result<KeyRecord, String> {
             }
         }
         "google_ai_studio" => {
-            let test_model = record
+            let test_model = record_snapshot
                 .default_model
                 .clone()
-                .or_else(|| record.models.first().cloned());
+                .or_else(|| record_snapshot.models.first().cloned());
             if let Some(model) = test_model {
                 let url = format!(
                     "{}/v1beta/models/{}:generateContent",
@@ -370,20 +349,25 @@ async fn check_key(app: AppHandle, id: String) -> Result<KeyRecord, String> {
         _ => "UnsupportedAdapter",
     };
 
-    record.status = status.to_string();
-    record.last_checked = Some(current_epoch_seconds());
+    {
+        let record = &mut list.keys[index];
+        record.status = status.to_string();
+        record.last_checked = Some(current_epoch_seconds());
+    }
     write_keys(&app, &list)?;
-    Ok(record.clone())
+    Ok(list.keys[index].clone())
 }
 
 #[tauri::command]
 async fn start_proxy(app: AppHandle, state: State<'_, AppState>) -> Result<ProxyStatus, String> {
-    let mut guard = state.proxy.lock().map_err(|_| "Proxy lock poisoned")?;
-    if let Some(handle) = guard.as_ref() {
-        return Ok(ProxyStatus {
-            running: true,
-            address: Some(format!("http://{}", handle.address)),
-        });
+    {
+        let guard = state.proxy.lock().map_err(|_| "Proxy lock poisoned")?;
+        if let Some(handle) = guard.as_ref() {
+            return Ok(ProxyStatus {
+                running: true,
+                address: Some(format!("http://{}", handle.address)),
+            });
+        }
     }
 
     let key_path = key_list_path(&app)?;
@@ -410,12 +394,14 @@ async fn start_proxy(app: AppHandle, state: State<'_, AppState>) -> Result<Proxy
     });
     let task = tokio::spawn(async move {
         let server = axum::serve(listener, app);
-        let _ = server.with_graceful_shutdown(async move {
-            let _ = shutdown_rx.await;
-        })
-        .await;
+        let _ = server
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await;
     });
 
+    let mut guard = state.proxy.lock().map_err(|_| "Proxy lock poisoned")?;
     *guard = Some(ProxyHandle {
         address,
         shutdown: shutdown_tx,
@@ -430,8 +416,11 @@ async fn start_proxy(app: AppHandle, state: State<'_, AppState>) -> Result<Proxy
 
 #[tauri::command]
 async fn stop_proxy(state: State<'_, AppState>) -> Result<ProxyStatus, String> {
-    let mut guard = state.proxy.lock().map_err(|_| "Proxy lock poisoned")?;
-    if let Some(handle) = guard.take() {
+    let handle = {
+        let mut guard = state.proxy.lock().map_err(|_| "Proxy lock poisoned")?;
+        guard.take()
+    };
+    if let Some(handle) = handle {
         let _ = handle.shutdown.send(());
         let _ = handle.task.await;
     }
@@ -488,225 +477,8 @@ async fn fetch_markdown() -> Result<String, String> {
         .map_err(|err| format!("Failed to read provider source: {err}"))
 }
 
-fn parse_markdown(markdown: &str) -> Vec<Provider> {
-    let heading_re = Regex::new(r"^###\s+(.*)$").unwrap();
-    let link_re = Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap();
-    let url_re = Regex::new(r"https?://[^\s)]+").unwrap();
-    let rpm_re =
-        Regex::new(r"(?i)(\d[\d,]*\s*[kK]?)\s*(rpm|requests per minute)").unwrap();
-    let tpm_re =
-        Regex::new(r"(?i)(\d[\d,]*\s*[kK]?)\s*(tpm|tokens per minute)").unwrap();
-
-    let mut providers: Vec<Provider> = Vec::new();
-    let mut current: Option<Provider> = None;
-    let mut in_models = false;
-    let mut in_description = false;
-
-    for line in markdown.lines() {
-        let trimmed = line.trim();
-        if let Some(caps) = heading_re.captures(trimmed) {
-            if let Some(provider) = current.take() {
-                providers.push(provider);
-            }
-
-            let raw_name = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
-            let name = clean_heading(raw_name, &link_re);
-            current = Some(Provider {
-                name,
-                description: String::new(),
-                notes: Vec::new(),
-                base_urls: Vec::new(),
-                models: Vec::new(),
-                limits: Limits {
-                    rpm: None,
-                    tpm: None,
-                },
-            });
-            in_models = false;
-            in_description = true;
-            continue;
-        }
-
-        let Some(provider) = current.as_mut() else {
-            continue;
-        };
-
-        if trimmed.is_empty() {
-            in_models = false;
-            in_description = false;
-        }
-
-        if is_models_heading(trimmed) {
-            in_models = true;
-            in_description = false;
-        }
-
-        if in_description && !trimmed.is_empty() && provider.description.is_empty() {
-            provider.description = strip_markdown_links(trimmed).trim().to_string();
-        }
-
-        if in_models {
-            if let Some(models) = parse_models_line(trimmed) {
-                for model in models {
-                    push_unique(&mut provider.models, model);
-                }
-            }
-        } else if let Some(models) = parse_models_inline(trimmed) {
-            for model in models {
-                push_unique(&mut provider.models, model);
-            }
-        }
-
-        if !trimmed.is_empty() && !in_models && !is_limits_heading(trimmed) {
-            if trimmed.starts_with('-') || trimmed.starts_with('*') {
-                let note = trimmed
-                    .trim_start_matches(&['-', '*'][..])
-                    .trim()
-                    .to_string();
-                if !note.is_empty() {
-                    provider.notes.push(strip_markdown_links(&note).trim().to_string());
-                }
-            }
-        }
-
-        for cap in url_re.captures_iter(trimmed) {
-            if let Some(url) = cap.get(0).map(|m| m.as_str()) {
-                if looks_like_base_url(url) {
-                    push_unique(&mut provider.base_urls, url.to_string());
-                }
-            }
-        }
-
-        if provider.limits.rpm.is_none() {
-            if let Some(caps) = rpm_re.captures(trimmed) {
-                if let Some(value) = caps.get(1).map(|m| m.as_str()) {
-                    provider.limits.rpm = parse_number(value);
-                }
-            }
-        }
-
-        if provider.limits.tpm.is_none() {
-            if let Some(caps) = tpm_re.captures(trimmed) {
-                if let Some(value) = caps.get(1).map(|m| m.as_str()) {
-                    provider.limits.tpm = parse_number(value);
-                }
-            }
-        }
-    }
-
-    if let Some(provider) = current.take() {
-        providers.push(provider);
-    }
-
-    providers.retain(|provider| !provider.name.is_empty());
-    providers
-}
-
-fn clean_heading(raw: &str, link_re: &Regex) -> String {
-    if let Some(caps) = link_re.captures(raw) {
-        return caps.get(1).map(|m| m.as_str()).unwrap_or(raw).trim().to_string();
-    }
-    raw.trim().to_string()
-}
-
-fn is_models_heading(line: &str) -> bool {
-    let lower = line.to_lowercase();
-    lower.starts_with("models")
-        || lower.starts_with("model")
-        || lower.contains("supported models")
-        || lower.contains("available models")
-}
-
-fn is_limits_heading(line: &str) -> bool {
-    let lower = line.to_lowercase();
-    lower.starts_with("limits") || lower.contains("rate limit")
-}
-
-fn parse_models_line(line: &str) -> Option<Vec<String>> {
-    if let Some(stripped) = line.strip_prefix("- ") {
-        return Some(extract_models(stripped));
-    }
-    if let Some(stripped) = line.strip_prefix("* ") {
-        return Some(extract_models(stripped));
-    }
-    None
-}
-
-fn parse_models_inline(line: &str) -> Option<Vec<String>> {
-    let lower = line.to_lowercase();
-    if lower.starts_with("models:") || lower.starts_with("model:") {
-        let parts: Vec<&str> = line.splitn(2, ':').collect();
-        if parts.len() == 2 {
-            return Some(extract_models(parts[1]));
-        }
-    }
-    None
-}
-
-fn extract_models(raw: &str) -> Vec<String> {
-    let mut cleaned = raw.replace('`', "");
-    cleaned = cleaned.replace("•", "");
-    cleaned = cleaned.replace("·", ",");
-    cleaned = cleaned.replace(" / ", ",");
-
-    let mut models = Vec::new();
-    for part in cleaned.split(',') {
-        let trimmed = strip_markdown_links(part).trim().to_string();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if trimmed.len() < 2 {
-            continue;
-        }
-        models.push(trimmed);
-    }
-    models
-}
-
-fn strip_markdown_links(text: &str) -> String {
-    let link_re = Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap();
-    link_re
-        .replace_all(text, |caps: &regex::Captures| {
-            caps.get(1).map(|m| m.as_str()).unwrap_or("")
-        })
-        .to_string()
-}
-
-fn parse_number(raw: &str) -> Option<u32> {
-    let trimmed = raw.trim().replace(',', "");
-    if trimmed.is_empty() {
-        return None;
-    }
-    let (value, multiplier) = if let Some(stripped) = trimmed.strip_suffix('k') {
-        (stripped, 1_000)
-    } else if let Some(stripped) = trimmed.strip_suffix('K') {
-        (stripped, 1_000)
-    } else {
-        (trimmed.as_str(), 1)
-    };
-
-    value.trim().parse::<u32>().ok().map(|v| v * multiplier)
-}
-
 fn default_adapter() -> String {
     "openai".to_string()
-}
-
-fn looks_like_base_url(url: &str) -> bool {
-    let lower = url.to_lowercase();
-    lower.contains("api")
-        || lower.contains("openrouter")
-        || lower.contains("generativelanguage")
-        || lower.contains("openai")
-        || lower.contains("groq")
-        || lower.contains("cerebras")
-}
-
-fn push_unique(list: &mut Vec<String>, value: String) {
-    if list.iter().any(|existing| existing == &value) {
-        return;
-    }
-    list.push(value);
 }
 
 fn diff_new_providers(previous: Option<&ProviderConfig>, current: &ProviderConfig) -> Vec<String> {
@@ -758,12 +530,12 @@ fn read_config(app: &AppHandle) -> Result<Option<ProviderConfig>, String> {
     }
     let contents = fs::read_to_string(&path)
         .map_err(|err| format!("Failed to read config from {}: {err}", path.display()))?;
-    let config = serde_json::from_str(&contents)
-        .map_err(|err| format!("Failed to parse config: {err}"))?;
+    let config =
+        serde_json::from_str(&contents).map_err(|err| format!("Failed to parse config: {err}"))?;
     Ok(Some(config))
 }
 
-fn current_epoch_seconds() -> u64 {
+pub(crate) fn current_epoch_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -785,8 +557,8 @@ fn read_keys(app: &AppHandle) -> Result<Option<KeyList>, String> {
     }
     let contents = fs::read_to_string(&path)
         .map_err(|err| format!("Failed to read keys from {}: {err}", path.display()))?;
-    let list = serde_json::from_str(&contents)
-        .map_err(|err| format!("Failed to parse keys: {err}"))?;
+    let list =
+        serde_json::from_str(&contents).map_err(|err| format!("Failed to parse keys: {err}"))?;
     Ok(Some(list))
 }
 
@@ -816,7 +588,7 @@ async fn health_check(AxumState(state): AxumState<ProxyState>) -> impl IntoRespo
 async fn chat_completions(
     AxumState(state): AxumState<ProxyState>,
     Json(payload): Json<serde_json::Value>,
-) -> impl IntoResponse {
+) -> Response {
     let model = payload
         .get("model")
         .and_then(|value| value.as_str())
@@ -828,7 +600,7 @@ async fn chat_completions(
         .unwrap_or(false);
 
     let model = model.unwrap_or_else(|| "unknown".to_string());
-    let mut keys = match load_keys_for_proxy(&state.key_path) {
+    let keys = match load_keys_for_proxy(&state.key_path) {
         Ok(keys) => keys,
         Err(err) => {
             append_log(&state.logs, "error", &err);
@@ -840,7 +612,8 @@ async fn chat_completions(
                         "type": "proxy_error"
                     }
                 })),
-            );
+            )
+                .into_response();
         }
     };
 
@@ -854,7 +627,8 @@ async fn chat_completions(
                     "type": "proxy_error"
                 }
             })),
-        );
+        )
+            .into_response();
     }
 
     let mut candidates: Vec<ProxyKey> = keys
@@ -877,7 +651,8 @@ async fn chat_completions(
                     "type": "proxy_error"
                 }
             })),
-        );
+        )
+            .into_response();
     }
 
     candidates.sort_by_key(|key| usage_for_key(&state.usage, &key.record.id));
@@ -892,10 +667,7 @@ async fn chat_completions(
                         append_log(
                             &state.logs,
                             "warn",
-                            &format!(
-                                "Rate limited for {}. Trying next key.",
-                                key.record.provider
-                            ),
+                            &format!("Rate limited for {}. Trying next key.", key.record.provider),
                         );
                         continue;
                     }
@@ -929,18 +701,14 @@ async fn chat_completions(
                 }
             }
         } else {
-            let result =
-                forward_request(&state.client, &key, &payload, &model, &adapter).await;
+            let result = forward_request(&state.client, &key, &payload, &model, &adapter).await;
             match result {
                 Ok((status, body, content_type)) => {
                     if status.as_u16() == 429 {
                         append_log(
                             &state.logs,
                             "warn",
-                            &format!(
-                                "Rate limited for {}. Trying next key.",
-                                key.record.provider
-                            ),
+                            &format!("Rate limited for {}. Trying next key.", key.record.provider),
                         );
                         continue;
                     }
@@ -986,12 +754,13 @@ async fn chat_completions(
             }
         })),
     )
+        .into_response()
 }
 
 #[derive(Debug, Clone)]
-struct ProxyKey {
-    record: KeyRecord,
-    secret: String,
+pub(crate) struct ProxyKey {
+    pub(crate) record: KeyRecord,
+    pub(crate) secret: String,
 }
 
 fn load_keys_for_proxy(path: &PathBuf) -> Result<Vec<ProxyKey>, String> {
@@ -1049,8 +818,8 @@ fn read_usage(path: &PathBuf) -> Result<HashMap<String, UsageWindow>, String> {
     }
     let contents = fs::read_to_string(path)
         .map_err(|err| format!("Failed to read usage from {}: {err}", path.display()))?;
-    let usage = serde_json::from_str(&contents)
-        .map_err(|err| format!("Failed to parse usage: {err}"))?;
+    let usage =
+        serde_json::from_str(&contents).map_err(|err| format!("Failed to parse usage: {err}"))?;
     Ok(usage)
 }
 
@@ -1110,18 +879,10 @@ fn key_supports_model(key: &ProxyKey, requested: &str) -> bool {
     if key.record.models.is_empty() {
         return true;
     }
-    if key
-        .record
-        .models
-        .iter()
-        .any(|model| model == requested)
-    {
+    if key.record.models.iter().any(|model| model == requested) {
         return true;
     }
-    key.record
-        .model_map
-        .iter()
-        .any(|map| map.from == requested)
+    key.record.model_map.iter().any(|map| map.from == requested)
 }
 
 fn resolve_model(key: &ProxyKey, requested: &str) -> String {
@@ -1134,12 +895,7 @@ fn resolve_model(key: &ProxyKey, requested: &str) -> String {
     {
         return mapped;
     }
-    if key
-        .record
-        .models
-        .iter()
-        .any(|model| model == requested)
-    {
+    if key.record.models.iter().any(|model| model == requested) {
         return requested.to_string();
     }
     key.record
@@ -1156,12 +912,12 @@ async fn forward_request(
     requested_model: &str,
     adapter: &str,
 ) -> Result<(axum::http::StatusCode, bytes::Bytes, String), String> {
+    let adapter = adapters::adapter_for(adapter).ok_or("Unsupported adapter".to_string())?;
     let model = resolve_model(key, requested_model);
-    match adapter {
-        "openai" | "openrouter" => forward_openai_request(client, key, payload, &model).await,
-        "google_ai_studio" => forward_google_request(client, key, payload, &model).await,
-        _ => Err("Unsupported adapter".to_string()),
-    }
+    let response = adapter
+        .forward_request(client, key, payload, &model)
+        .await?;
+    Ok((response.status, response.body, response.content_type))
 }
 
 async fn forward_stream_request(
@@ -1171,215 +927,17 @@ async fn forward_stream_request(
     requested_model: &str,
     adapter: &str,
 ) -> Result<(axum::http::StatusCode, axum::body::Body, String), String> {
+    let adapter = adapters::adapter_for(adapter).ok_or("Unsupported adapter".to_string())?;
+    if !adapter.supports_stream() {
+        return Err("Streaming not supported for this adapter".to_string());
+    }
     let model = resolve_model(key, requested_model);
-    match adapter {
-        "openai" | "openrouter" => forward_openai_stream(client, key, payload, &model).await,
-        "google_ai_studio" => Err("Streaming not supported for this adapter".to_string()),
-        _ => Err("Unsupported adapter".to_string()),
-    }
+    let response = adapter
+        .forward_stream(client, key, payload, &model)
+        .await?;
+    Ok((response.status, response.body, response.content_type))
 }
 
-async fn forward_openai_request(
-    client: &reqwest::Client,
-    key: &ProxyKey,
-    payload: &serde_json::Value,
-    model: &str,
-) -> Result<(axum::http::StatusCode, bytes::Bytes, String), String> {
-    let base_url = key.record.base_url.trim_end_matches('/');
-    let url = format!("{}/v1/chat/completions", base_url);
-    let mut body = payload.clone();
-    if let Some(obj) = body.as_object_mut() {
-        obj.insert("model".to_string(), serde_json::Value::String(model.to_string()));
-    }
-    let response = client
-        .post(url)
-        .bearer_auth(&key.secret)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|err| format!("Request failed: {err}"))?;
-
-    let status = axum::http::StatusCode::from_u16(response.status().as_u16())
-        .unwrap_or(axum::http::StatusCode::BAD_GATEWAY);
-    let content_type = response
-        .headers()
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("application/json")
-        .to_string();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|err| format!("Failed to read response: {err}"))?;
-    Ok((status, body, content_type))
-}
-
-async fn forward_openai_stream(
-    client: &reqwest::Client,
-    key: &ProxyKey,
-    payload: &serde_json::Value,
-    model: &str,
-) -> Result<(axum::http::StatusCode, axum::body::Body, String), String> {
-    let base_url = key.record.base_url.trim_end_matches('/');
-    let url = format!("{}/v1/chat/completions", base_url);
-    let mut body = payload.clone();
-    if let Some(obj) = body.as_object_mut() {
-        obj.insert("model".to_string(), serde_json::Value::String(model.to_string()));
-        obj.insert("stream".to_string(), serde_json::Value::Bool(true));
-    }
-    let response = client
-        .post(url)
-        .bearer_auth(&key.secret)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|err| format!("Request failed: {err}"))?;
-
-    let status = axum::http::StatusCode::from_u16(response.status().as_u16())
-        .unwrap_or(axum::http::StatusCode::BAD_GATEWAY);
-    let content_type = response
-        .headers()
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("text/event-stream")
-        .to_string();
-
-    let stream = response.bytes_stream().map(|chunk| {
-        chunk.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
-    });
-    let body = axum::body::Body::from_stream(stream);
-    Ok((status, body, content_type))
-}
-
-async fn forward_google_request(
-    client: &reqwest::Client,
-    key: &ProxyKey,
-    payload: &serde_json::Value,
-    model: &str,
-) -> Result<(axum::http::StatusCode, bytes::Bytes, String), String> {
-    let base_url = key.record.base_url.trim_end_matches('/');
-    let url = format!("{}/v1beta/models/{}:generateContent", base_url, model);
-
-    let (contents, generation) = openai_to_gemini(payload);
-    let body = serde_json::json!({
-        "contents": contents,
-        "generationConfig": generation
-    });
-
-    let response = client
-        .post(url)
-        .query(&[("key", key.secret.as_str())])
-        .json(&body)
-        .send()
-        .await
-        .map_err(|err| format!("Request failed: {err}"))?;
-
-    let status = axum::http::StatusCode::from_u16(response.status().as_u16())
-        .unwrap_or(axum::http::StatusCode::BAD_GATEWAY);
-    let content_type = response
-        .headers()
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("application/json")
-        .to_string();
-
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|err| format!("Failed to read response: {err}"))?;
-
-    if !status.is_success() {
-        return Ok((status, bytes, content_type));
-    }
-
-    let response_json: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|err| format!("Failed to parse provider response: {err}"))?;
-    let text = response_json
-        .get("candidates")
-        .and_then(|value| value.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|value| value.get("content"))
-        .and_then(|value| value.get("parts"))
-        .and_then(|value| value.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|value| value.get("text"))
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-
-    let output = serde_json::json!({
-        "id": format!("chatcmpl-{}", Uuid::new_v4()),
-        "object": "chat.completion",
-        "created": current_epoch_seconds(),
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": text
-                },
-                "finish_reason": "stop"
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-        }
-    });
-    let output_bytes = serde_json::to_vec(&output)
-        .map_err(|err| format!("Failed to serialize proxy response: {err}"))?;
-    Ok((status, bytes::Bytes::from(output_bytes), "application/json".to_string()))
-}
-
-fn openai_to_gemini(payload: &serde_json::Value) -> (Vec<serde_json::Value>, serde_json::Value) {
-    let mut contents = Vec::new();
-    let mut buffer = Vec::new();
-    if let Some(messages) = payload.get("messages").and_then(|value| value.as_array()) {
-        for message in messages {
-            let role = message
-                .get("role")
-                .and_then(|value| value.as_str())
-                .unwrap_or("user");
-            let content = message
-                .get("content")
-                .and_then(|value| value.as_str())
-                .unwrap_or("");
-            let original_role = role;
-            let role = match role {
-                "assistant" => "model",
-                "system" => "user",
-                _ => "user",
-            };
-            let text = if original_role == "system" {
-                format!("System: {}", content)
-            } else {
-                content.to_string()
-            };
-            buffer.push(serde_json::json!({
-                "role": role,
-                "parts": [
-                    { "text": text }
-                ]
-            }));
-        }
-    }
-    if !buffer.is_empty() {
-        contents.extend(buffer);
-    }
-
-    let mut generation = serde_json::json!({});
-    if let Some(max_tokens) = payload.get("max_tokens").and_then(|v| v.as_u64()) {
-        generation["maxOutputTokens"] = serde_json::Value::Number(max_tokens.into());
-    }
-    if let Some(temperature) = payload.get("temperature").and_then(|v| v.as_f64()) {
-        if let Some(num) = serde_json::Number::from_f64(temperature) {
-            generation["temperature"] = serde_json::Value::Number(num);
-        }
-    }
-
-    (contents, generation)
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

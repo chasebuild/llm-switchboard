@@ -1,6 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import {
+  Activity,
+  CheckCircle2,
+  ChevronRight,
+  Cloud,
+  Database,
+  KeyRound,
+  Plug,
+  RefreshCw,
+  Server,
+  ShieldCheck,
+} from "lucide-react";
+
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "./components/ui/card";
+import { Input } from "./components/ui/input";
+import { Select } from "./components/ui/select";
+import { Separator } from "./components/ui/separator";
+
 
 type Limits = {
   rpm: number | null;
@@ -52,9 +77,9 @@ function formatTimestamp(timestamp: number | null) {
 
 function summarizeModels(models: string[]) {
   if (models.length === 0) return "No models parsed yet";
-  const preview = models.slice(0, 6).join(", ");
-  if (models.length <= 6) return preview;
-  return `${preview} +${models.length - 6} more`;
+  const preview = models.slice(0, 4).join(", ");
+  if (models.length <= 4) return preview;
+  return `${preview} +${models.length - 4} more`;
 }
 
 function App() {
@@ -320,342 +345,516 @@ function App() {
   }
 
   return (
-    <div className="app">
-      <header className="hero">
-        <div>
-          <p className="eyebrow">FreeLLM Switchboard</p>
-          <h1>Local provider sync + rotation control center</h1>
-          <p className="subtitle">
-            Pull the latest free LLM endpoints, cache provider metadata, and prep your local proxy
-            layer.
-          </p>
-        </div>
-        <div className="hero-card">
-          <div className="stat">
-            <span className="stat-label">Providers</span>
-            <span className="stat-value">{providerCount}</span>
+    <div className="relative min-h-screen overflow-hidden bg-[#0b0d12] text-foreground">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_55%),radial-gradient(circle_at_30%_20%,_rgba(56,189,248,0.08),_transparent_35%),radial-gradient(circle_at_70%_70%,_rgba(15,23,42,0.7),_transparent_60%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(120deg,_rgba(15,23,42,0.45),_rgba(2,6,23,0.7))]" />
+
+      <header className="sticky top-0 z-30 border-b border-border/70 bg-background/80 backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-[1400px] flex-wrap items-center justify-between gap-4 px-6 py-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/15 text-primary">
+              <ShieldCheck className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-[0.65rem] uppercase tracking-[0.3em] text-muted-foreground">
+                FreeLLM Switchboard
+              </p>
+              <h1 className="text-xl font-semibold">Provider control center</h1>
+            </div>
           </div>
-          <div className="stat">
-            <span className="stat-label">Models</span>
-            <span className="stat-value">{totalModels}</span>
+
+          <div className="hidden xl:flex items-center gap-3 text-sm text-muted-foreground">
+            <div className="flex items-center gap-2 rounded-full border border-border/60 bg-muted/40 px-3 py-1">
+              <Database className="h-4 w-4 text-primary" />
+              <span>{providerCount} providers</span>
+            </div>
+            <div className="flex items-center gap-2 rounded-full border border-border/60 bg-muted/40 px-3 py-1">
+              <Cloud className="h-4 w-4 text-primary" />
+              <span>{totalModels} models indexed</span>
+            </div>
+            <div className="flex items-center gap-2 rounded-full border border-border/60 bg-muted/40 px-3 py-1">
+              <Activity className="h-4 w-4 text-primary" />
+              <span>Last sync {formatTimestamp(config?.fetched_at ?? null)}</span>
+            </div>
           </div>
-          <div className="stat">
-            <span className="stat-label">Last Sync</span>
-            <span className="stat-value">{formatTimestamp(config?.fetched_at ?? null)}</span>
+
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={syncProviders} disabled={loading}>
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              {loading ? "Syncing" : "Sync Providers"}
+            </Button>
           </div>
-          <button className="primary" onClick={syncProviders} disabled={loading}>
-            {loading ? "Syncing..." : "Sync Providers"}
-          </button>
-          <p className="status">{status}</p>
         </div>
       </header>
 
-      {newProviders.length > 0 && (
-        <section className="notice">
-          <h2>New Providers</h2>
-          <p>{newProviders.join(", ")}</p>
-        </section>
-      )}
-
-      <section className="catalog">
-        <div className="section-header">
-          <h2>Provider Catalog</h2>
-          <p>Sync from GitHub to populate the providers list.</p>
-        </div>
-        <div className="catalog-grid">
-          <aside className="provider-list">
-            {(config?.providers ?? []).map((provider) => (
-              <button
-                key={provider.name}
-                className={`provider-item ${
-                  selectedProvider?.name === provider.name ? "active" : ""
-                }`}
-                onClick={() => setSelectedProvider(provider)}
-              >
-                <span>{provider.name}</span>
-                <span className="provider-count">{provider.models.length}</span>
-              </button>
-            ))}
-            {providerCount === 0 && (
-              <div className="empty-note">No providers available. Run a sync.</div>
-            )}
-          </aside>
-          <div className="provider-detail">
-            {selectedProvider ? (
-              <>
-                <div className="provider-detail-header">
+      <div className="mx-auto flex w-full max-w-[1400px] gap-6 px-6 pb-12 pt-6">
+        <aside className="hidden w-64 shrink-0 flex-col gap-6 lg:flex">
+          <Card className="border-border/70 bg-card/80">
+            <CardHeader>
+              <CardTitle className="text-base">Providers</CardTitle>
+              <CardDescription>{status}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {(config?.providers ?? []).map((provider) => (
+                <button
+                  key={provider.name}
+                  className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition hover:border-primary/60 hover:bg-primary/10 ${
+                    selectedProvider?.name === provider.name
+                      ? "border-primary/60 bg-primary/15 text-foreground"
+                      : "border-transparent bg-transparent text-muted-foreground"
+                  }`}
+                  onClick={() => setSelectedProvider(provider)}
+                >
                   <div>
-                    <h3>{selectedProvider.name}</h3>
-                    <p className="subtitle">
-                      Models: {selectedProvider.models.length} · RPM{" "}
-                      {selectedProvider.limits.rpm ?? "—"} · TPM{" "}
-                      {selectedProvider.limits.tpm ?? "—"}
+                    <p className="font-medium text-foreground">{provider.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {summarizeModels(provider.models)}
                     </p>
                   </div>
-                  <button className="primary" onClick={() => applyProvider(selectedProvider)}>
-                    Use This Provider
-                  </button>
-                </div>
-                {selectedProvider.description && (
-                  <p className="provider-description">{selectedProvider.description}</p>
-                )}
-                {selectedProvider.base_urls && selectedProvider.base_urls.length > 0 && (
-                  <div className="provider-base">
-                    <h4>Base URLs</h4>
-                    <div className="base-list">
-                      {selectedProvider.base_urls.map((url) => (
-                        <span key={url} className="base-chip">
-                          {url}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <div className="model-list">
-                  {selectedProvider.models.length === 0 && (
-                    <p className="empty-note">No models parsed yet.</p>
-                  )}
-                  {selectedProvider.models.map((model) => (
-                    <span key={model} className="model-chip">
-                      {model}
-                    </span>
-                  ))}
-                </div>
-                {selectedProvider.notes && selectedProvider.notes.length > 0 && (
-                  <div className="provider-notes">
-                    <h4>Notes</h4>
-                    {selectedProvider.notes.map((note, index) => (
-                      <p key={`${selectedProvider.name}-note-${index}`}>{note}</p>
-                    ))}
-                  </div>
-                )}
-                <div className="provider-doc">
-                  <p>
-                    Add your API key and base URL below. The proxy will expose this provider through
-                    the local OpenAI-compatible endpoint.
-                  </p>
-                </div>
-              </>
-            ) : (
-              <p className="empty-note">Select a provider to see details.</p>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className="vault">
-        <div className="section-header">
-          <h2>Key Vault</h2>
-          <p>Local system keychain only. No secrets leave this machine.</p>
-        </div>
-        <div className="vault-grid">
-          <div className="vault-form">
-            <h3>Add API Key</h3>
-            <label>
-              Provider
-              <input
-                value={keyProvider}
-                onChange={(event) => setKeyProvider(event.currentTarget.value)}
-                placeholder="Groq, Cerebras, OpenRouter..."
-              />
-            </label>
-            <label>
-              Base URL
-              <input
-                value={keyBaseUrl}
-                onChange={(event) => setKeyBaseUrl(event.currentTarget.value)}
-                placeholder="https://api.provider.com"
-              />
-            </label>
-            <label>
-              Adapter
-              <select
-                value={keyAdapter}
-                onChange={(event) => applyAdapter(event.currentTarget.value)}
-              >
-                <option value="openai">OpenAI-compatible</option>
-                <option value="openrouter">OpenRouter</option>
-                <option value="google_ai_studio">Google AI Studio (Gemini)</option>
-              </select>
-            </label>
-            <label>
-              Label (optional)
-              <input
-                value={keyLabel}
-                onChange={(event) => setKeyLabel(event.currentTarget.value)}
-                placeholder="Personal / Team / Backup"
-              />
-            </label>
-            <label>
-              Allowed models (comma-separated)
-              <input
-                value={keyModels}
-                onChange={(event) => setKeyModels(event.currentTarget.value)}
-                placeholder="llama-3.1-8b, mixtral-8x7b"
-              />
-            </label>
-            <label>
-              Default model for health checks
-              <input
-                value={keyDefaultModel}
-                onChange={(event) => setKeyDefaultModel(event.currentTarget.value)}
-                placeholder="llama-3.1-8b"
-              />
-            </label>
-            <label>
-              Model mappings (OpenAI=Provider)
-              <input
-                value={keyModelMap}
-                onChange={(event) => setKeyModelMap(event.currentTarget.value)}
-                placeholder="gpt-4o-mini=gemini-1.5-flash"
-              />
-            </label>
-            <label>
-              Secret
-              <input
-                type="password"
-                value={keySecret}
-                onChange={(event) => setKeySecret(event.currentTarget.value)}
-                placeholder="Paste API key"
-              />
-            </label>
-            <button className="primary" onClick={addKey}>
-              Store Key
-            </button>
-            <p className="status">{keyStatus}</p>
-          </div>
-          <div className="vault-list">
-            <h3>Stored Keys</h3>
-            {keys.length === 0 && <p className="empty-note">No keys stored yet.</p>}
-            {keys.map((record) => (
-              <div key={record.id} className="key-row">
-                <div>
-                  <p className="key-title">{record.provider}</p>
-                  <p className="key-meta">
-                    {record.label} · {record.status}
-                  </p>
-                  <p className="key-meta">
-                    {record.adapter} · {record.base_url || "No base URL"}
-                  </p>
-                </div>
-                <div className="key-actions">
-                  <button className="ghost" onClick={() => checkKey(record.id)}>
-                    Check
-                  </button>
-                  <button className="ghost danger" onClick={() => removeKey(record.id)}>
-                    Remove
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="proxy">
-        <div className="section-header">
-          <h2>Local Proxy</h2>
-          <p>
-            OpenAI-compatible bridge at{" "}
-            <span className="mono">http://localhost:1234/v1/chat/completions</span>
-          </p>
-        </div>
-        <div className="proxy-card">
-          <div className="proxy-status">
-            <span className={`dot ${proxyStatus.running ? "live" : "down"}`} />
-            <div>
-              <p className="proxy-title">
-                {proxyStatus.running ? "Running" : "Stopped"}
-              </p>
-              <p className="proxy-subtitle">
-                {proxyStatus.address ? proxyStatus.address : "No active listener"}
-              </p>
-            </div>
-          </div>
-          <div className="proxy-actions">
-            <button className="primary" onClick={startProxy} disabled={proxyStatus.running}>
-              Start Proxy
-            </button>
-            <button className="ghost" onClick={stopProxy} disabled={!proxyStatus.running}>
-              Stop Proxy
-            </button>
-          </div>
-          <p className="status">{proxyMessage}</p>
-        </div>
-      </section>
-
-      <section className="logs">
-        <div className="section-header">
-          <h2>Proxy Logs</h2>
-          <div className="log-actions">
-            <div className="filter-group">
-              {["all", "info", "warn", "error"].map((level) => (
-                <button
-                  key={level}
-                  className={`ghost ${logFilter === level ? "active" : ""}`}
-                  onClick={() => setLogFilter(level as typeof logFilter)}
-                >
-                  {level}
+                  <Badge variant="muted">{provider.models.length}</Badge>
                 </button>
               ))}
-            </div>
-            <button className="ghost" onClick={clearLogs}>
-              Clear Logs
-            </button>
-          </div>
-        </div>
-        <div className="log-panel">
-          {filteredLogs.length === 0 && <p className="empty-note">No log entries yet.</p>}
-          {filteredLogs.map((log, index) => (
-            <div key={`${log.timestamp}-${index}`} className="log-row">
-              <span className={`log-level ${log.level}`}>{log.level}</span>
-              <span className="log-time">
-                {new Date(log.timestamp * 1000).toLocaleTimeString()}
-              </span>
-              <span className="log-message">{log.message}</span>
-            </div>
-          ))}
-        </div>
-        <p className="status">{logStatus}</p>
-      </section>
+              {providerCount === 0 && (
+                <p className="text-sm text-muted-foreground">No providers yet.</p>
+              )}
+            </CardContent>
+          </Card>
 
-      <section className="providers">
-        <div className="section-header">
-          <h2>Provider Inventory</h2>
-          <p>
-            Source:{" "}
-            <span className="mono">
-              {config?.source_url ?? "https://raw.githubusercontent.com/.../README.md"}
-            </span>
-          </p>
-        </div>
-        <div className="provider-grid">
-          {(config?.providers ?? []).map((provider) => (
-            <article key={provider.name} className="provider-card">
-              <div className="provider-header">
-                <h3>{provider.name}</h3>
-                <span className="pill">{provider.models.length} models</span>
-              </div>
-              <div className="limits">
-                <div>
-                  <span className="label">RPM</span>
-                  <span className="value">{provider.limits.rpm ?? "—"}</span>
-                </div>
-                <div>
-                  <span className="label">TPM</span>
-                  <span className="value">{provider.limits.tpm ?? "—"}</span>
-                </div>
-              </div>
-              <p className="models">{summarizeModels(provider.models)}</p>
-            </article>
-          ))}
-          {providerCount === 0 && (
-            <div className="empty">
-              <p>No providers cached yet. Sync to pull the latest list.</p>
-            </div>
+          {newProviders.length > 0 && (
+            <Card className="border-primary/50 bg-primary/10">
+              <CardHeader>
+                <CardTitle className="text-base">New providers</CardTitle>
+                <CardDescription>Freshly synced from GitHub</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-wrap gap-2">
+                {newProviders.map((provider) => (
+                  <Badge key={provider} variant="default">
+                    {provider}
+                  </Badge>
+                ))}
+              </CardContent>
+            </Card>
           )}
-        </div>
-      </section>
+
+          <Card className="border-border/70 bg-card/80">
+            <CardHeader>
+              <CardTitle className="text-base">Quick status</CardTitle>
+              <CardDescription>Live proxy + key health</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Proxy</span>
+                <Badge variant={proxyStatus.running ? "success" : "muted"}>
+                  {proxyStatus.running ? "Running" : "Stopped"}
+                </Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Keys stored</span>
+                <Badge variant="secondary">{keys.length}</Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Key status</span>
+                <Badge variant="outline">{keyStatus}</Badge>
+              </div>
+            </CardContent>
+          </Card>
+        </aside>
+
+        <main className="flex min-w-0 flex-1 flex-col gap-6">
+          <div className="lg:hidden">
+            <Card className="border-border/70 bg-card/80">
+              <CardHeader>
+                <CardTitle className="text-base">Providers</CardTitle>
+                <CardDescription>{status}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {(config?.providers ?? []).map((provider) => (
+                  <button
+                    key={provider.name}
+                    className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition hover:border-primary/60 hover:bg-primary/10 ${
+                      selectedProvider?.name === provider.name
+                        ? "border-primary/60 bg-primary/15 text-foreground"
+                        : "border-transparent bg-transparent text-muted-foreground"
+                    }`}
+                    onClick={() => setSelectedProvider(provider)}
+                  >
+                    <div>
+                      <p className="font-medium text-foreground">{provider.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {summarizeModels(provider.models)}
+                      </p>
+                    </div>
+                    <Badge variant="muted">{provider.models.length}</Badge>
+                  </button>
+                ))}
+                {providerCount === 0 && (
+                  <p className="text-sm text-muted-foreground">No providers yet.</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+            <Card className="border-border/70 bg-card/80">
+              <CardHeader className="flex flex-col gap-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-lg">
+                      {selectedProvider ? selectedProvider.name : "Select a provider"}
+                    </CardTitle>
+                    <CardDescription>
+                      {selectedProvider
+                        ? `Models ${selectedProvider.models.length} · RPM ${
+                            selectedProvider.limits.rpm ?? "—"
+                          } · TPM ${selectedProvider.limits.tpm ?? "—"}`
+                        : "Choose a provider to see details."}
+                    </CardDescription>
+                  </div>
+                  {selectedProvider && (
+                    <Button variant="outline" onClick={() => applyProvider(selectedProvider)}>
+                      <Plug className="h-4 w-4" />
+                      Use this provider
+                    </Button>
+                  )}
+                </div>
+                {selectedProvider?.description && (
+                  <p className="text-sm text-muted-foreground">
+                    {selectedProvider.description}
+                  </p>
+                )}
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {selectedProvider ? (
+                  <>
+                    {selectedProvider.base_urls && selectedProvider.base_urls.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                          Base URLs
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {selectedProvider.base_urls.map((url) => (
+                            <span
+                              key={url}
+                              className="rounded-full border border-border/70 bg-muted/40 px-3 py-1 text-xs text-muted-foreground"
+                            >
+                              {url}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                        Model catalog
+                      </div>
+                      {selectedProvider.models.length === 0 && (
+                        <p className="text-sm text-muted-foreground">
+                          No models parsed yet.
+                        </p>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        {selectedProvider.models.map((model) => (
+                          <span
+                            key={model}
+                            className="rounded-full border border-border/70 bg-background/40 px-3 py-1 text-xs"
+                          >
+                            {model}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    {selectedProvider.notes && selectedProvider.notes.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                          Notes
+                        </div>
+                        <div className="space-y-2 text-sm text-muted-foreground">
+                          {selectedProvider.notes.map((note, index) => (
+                            <p key={`${selectedProvider.name}-note-${index}`}>{note}</p>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-xs text-muted-foreground">
+                      The proxy reads providers from the README. If models are missing, add
+                      them manually in the key vault.
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Select a provider to see details.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-border/70 bg-card/80">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <KeyRound className="h-5 w-5 text-primary" />
+                  Key vault
+                </CardTitle>
+                <CardDescription>Store secrets, model lists, and adapters.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                    Provider
+                  </label>
+                  <Input
+                    value={keyProvider}
+                    onChange={(event) => setKeyProvider(event.currentTarget.value)}
+                    placeholder="Groq, Cerebras, OpenRouter..."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                    Base URL
+                  </label>
+                  <Input
+                    value={keyBaseUrl}
+                    onChange={(event) => setKeyBaseUrl(event.currentTarget.value)}
+                    placeholder="https://api.provider.com"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                    Adapter
+                  </label>
+                  <Select
+                    value={keyAdapter}
+                    onChange={(event) => applyAdapter(event.currentTarget.value)}
+                  >
+                    <option value="openai">OpenAI-compatible</option>
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="google_ai_studio">Google AI Studio (Gemini)</option>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                    Label (optional)
+                  </label>
+                  <Input
+                    value={keyLabel}
+                    onChange={(event) => setKeyLabel(event.currentTarget.value)}
+                    placeholder="Personal / Team / Backup"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                    Allowed models
+                  </label>
+                  <Input
+                    value={keyModels}
+                    onChange={(event) => setKeyModels(event.currentTarget.value)}
+                    placeholder="llama-3.1-8b, mixtral-8x7b"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                    Default model for health checks
+                  </label>
+                  <Input
+                    value={keyDefaultModel}
+                    onChange={(event) => setKeyDefaultModel(event.currentTarget.value)}
+                    placeholder="llama-3.1-8b"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                    Model mappings (OpenAI=Provider)
+                  </label>
+                  <Input
+                    value={keyModelMap}
+                    onChange={(event) => setKeyModelMap(event.currentTarget.value)}
+                    placeholder="gpt-4o-mini=gemini-1.5-flash"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                    Secret
+                  </label>
+                  <Input
+                    type="password"
+                    value={keySecret}
+                    onChange={(event) => setKeySecret(event.currentTarget.value)}
+                    placeholder="Paste API key"
+                  />
+                </div>
+                <Button className="w-full" onClick={addKey}>
+                  <ChevronRight className="h-4 w-4" />
+                  Store key
+                </Button>
+                <p className="text-xs text-muted-foreground">{keyStatus}</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Card className="border-border/70 bg-card/80">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Server className="h-5 w-5 text-primary" />
+                  Stored keys
+                </CardTitle>
+                <CardDescription>Health status for each provider key.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {keys.length === 0 && (
+                  <p className="text-sm text-muted-foreground">No keys stored yet.</p>
+                )}
+                {keys.map((record) => (
+                  <div
+                    key={record.id}
+                    className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border/70 bg-muted/40 p-4"
+                  >
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold text-foreground">
+                        {record.provider}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {record.label || "No label"} · {record.status}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {record.adapter} · {record.base_url || "No base URL"}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="ghost" size="sm" onClick={() => checkKey(record.id)}>
+                        Check
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => removeKey(record.id)}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            <Card className="border-border/70 bg-card/80">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Plug className="h-5 w-5 text-primary" />
+                  Local proxy
+                </CardTitle>
+                <CardDescription>
+                  OpenAI-compatible bridge at
+                  <span className="mono ml-1 text-xs">http://localhost:1234/v1/chat/completions</span>
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center gap-3 rounded-lg border border-border/70 bg-muted/40 p-4">
+                  <div
+                    className={`h-3 w-3 rounded-full ${
+                      proxyStatus.running ? "bg-emerald-400" : "bg-rose-400"
+                    }`}
+                  />
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">
+                      {proxyStatus.running ? "Running" : "Stopped"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {proxyStatus.address ? proxyStatus.address : "No active listener"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={startProxy} disabled={proxyStatus.running}>
+                    Start proxy
+                  </Button>
+                  <Button variant="secondary" onClick={stopProxy} disabled={!proxyStatus.running}>
+                    Stop proxy
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">{proxyMessage}</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card className="border-border/70 bg-card/80">
+            <CardHeader>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Activity className="h-5 w-5 text-primary" />
+                    Proxy logs
+                  </CardTitle>
+                  <CardDescription>Streaming activity from the local gateway.</CardDescription>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {(["all", "info", "warn", "error"] as const).map((level) => (
+                    <Button
+                      key={level}
+                      size="sm"
+                      variant={logFilter === level ? "default" : "ghost"}
+                      onClick={() => setLogFilter(level)}
+                    >
+                      {level}
+                    </Button>
+                  ))}
+                  <Button size="sm" variant="outline" onClick={clearLogs}>
+                    Clear logs
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="max-h-[280px] space-y-2 overflow-y-auto rounded-lg border border-border/70 bg-[#0b0f17] p-4 font-mono text-xs">
+                {filteredLogs.length === 0 && (
+                  <p className="text-muted-foreground">No log entries yet.</p>
+                )}
+                {filteredLogs.map((log, index) => (
+                  <div
+                    key={`${log.timestamp}-${index}`}
+                    className="grid grid-cols-[70px_90px_1fr] gap-3 text-muted-foreground"
+                  >
+                    <span
+                      className={`font-semibold uppercase ${
+                        log.level === "info"
+                          ? "text-emerald-300"
+                          : log.level === "warn"
+                          ? "text-amber-300"
+                          : "text-rose-300"
+                      }`}
+                    >
+                      {log.level}
+                    </span>
+                    <span className="text-slate-400">
+                      {new Date(log.timestamp * 1000).toLocaleTimeString()}
+                    </span>
+                    <span className="text-slate-200">{log.message}</span>
+                  </div>
+                ))}
+              </div>
+              <Separator />
+              <p className="text-xs text-muted-foreground">{logStatus}</p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/70 bg-card/80">
+            <CardContent className="flex flex-wrap items-center justify-between gap-4 py-6">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                <div>
+                  <p className="text-sm font-semibold">System ready</p>
+                  <p className="text-xs text-muted-foreground">
+                    Providers synced from {config?.source_url ?? "GitHub"}
+                  </p>
+                </div>
+              </div>
+              <Button variant="ghost">
+                <KeyRound className="h-4 w-4" />
+                Manage secrets
+              </Button>
+            </CardContent>
+          </Card>
+        </main>
+      </div>
     </div>
   );
 }

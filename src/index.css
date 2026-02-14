@@ -1,0 +1,48 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 222 47% 8%;
+  --foreground: 210 40% 98%;
+  --card: 222 47% 12%;
+  --card-foreground: 210 40% 98%;
+  --popover: 222 47% 11%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 198 88% 56%;
+  --primary-foreground: 222 47% 12%;
+  --secondary: 217 20% 18%;
+  --secondary-foreground: 210 40% 96%;
+  --muted: 217 22% 18%;
+  --muted-foreground: 215 20% 70%;
+  --accent: 210 26% 22%;
+  --accent-foreground: 210 40% 96%;
+  --destructive: 0 72% 50%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 217 20% 22%;
+  --input: 217 20% 22%;
+  --ring: 198 88% 56%;
+  --radius: 0.85rem;
+}
+
+* {
+  @apply border-border;
+}
+
+body {
+  @apply bg-background text-foreground;
+  font-family: "Space Grotesk", ui-sans-serif, system-ui;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+code,
+pre,
+.mono {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
